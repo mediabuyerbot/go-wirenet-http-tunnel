@@ -19,7 +19,8 @@ func NewTunnel(
 	options ...TunnelOption,
 ) *Tunnel {
 	tunnel := &Tunnel{
-		client: client,
+		client:       client,
+		errorHandler: NewLogErrorHandler(),
 	}
 	for _, option := range options {
 		option(tunnel)
@@ -52,7 +53,7 @@ func (tunnel Tunnel) Handle(ctx context.Context, stream wirenet.Stream) {
 		}
 		reader.Close()
 		req.RequestURI = ""
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := tunnel.client.Do(req)
 		if err != nil {
 			tunnel.errorHandler.Handle(ctx, err)
 			return

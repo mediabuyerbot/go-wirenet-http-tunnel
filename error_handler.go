@@ -1,6 +1,10 @@
 package httptunnel
 
-import "context"
+import (
+	"context"
+	"log"
+	"os"
+)
 
 // ErrorHandler receives a transport error to be processed for diagnostic purposes.
 // Usually this means logging the error.
@@ -17,4 +21,18 @@ type ErrorHandlerFunc func(ctx context.Context, err error)
 // Handle calls f(ctx, err).
 func (f ErrorHandlerFunc) Handle(ctx context.Context, err error) {
 	f(ctx, err)
+}
+
+type LogErrorHandler struct {
+	logger *log.Logger
+}
+
+func NewLogErrorHandler() *LogErrorHandler {
+	return &LogErrorHandler{
+		logger: log.New(os.Stderr, "httptunnel ", log.LstdFlags),
+	}
+}
+
+func (h *LogErrorHandler) Handle(ctx context.Context, err error) {
+	h.logger.Println("[ERR]", err)
 }
