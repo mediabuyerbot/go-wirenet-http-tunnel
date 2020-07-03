@@ -40,13 +40,13 @@ client.go OR server.go
  
  // 2. Group related queries in one stream
  err = client.WithTx(ctx, sid, func(streamCtx context.Context) error {
-    req, err := http.NewRequestWithContext(sessCtx, "GET", "http://domain.com/1", nil) 
+    req, err := http.NewRequestWithContext(streamCtx, "GET", "http://domain.com/1", nil) 
     resp, err := client.Do(req)	
     // ...
-    req, err = http.NewRequestWithContext(sessCtx, "GET", "http://domain.com/2", nil) 
+    req, err = http.NewRequestWithContext(streamCtx, "GET", "http://domain.com/2", nil) 
     resp, err = client.Do(req)	
     // ... 
-    req, err = http.NewRequestWithContext(sessCtx, "GET", "http://domain.com/2", nil) 
+    req, err = http.NewRequestWithContext(streamCtx, "GET", "http://domain.com/2", nil) 
     resp, err = client.Do(req)	
     return nil
 })
