@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	DefaultReTryCount  = 5
-	DefaultHTTPTimeout = 10 * time.Second
+	DefaultReTryCount  = 10
+	DefaultHTTPTimeout = 120 * time.Second
 )
 
 type ReadRequest func(*bufio.Reader) (*http.Request, error)
