@@ -33,23 +33,39 @@ var (
 	ErrStreamWriterNotDefined = errors.New("httptunnel: stream writer not defined")
 )
 
-type HTTPClient struct {
-	streamName string
-	wire       wirenet.Wire
+type Client struct {
+	streamName   string
+	wire         wirenet.Wire
+	readResponse ReadResponse
 }
 
-func NewHttpClient(w wirenet.Wire, streamName string) *HTTPClient {
-	return &HTTPClient{
-		wire:       w,
-		streamName: streamName,
+func NewClient(w wirenet.Wire, streamName string, options ...ClientOption) *Client {
+	c := &Client{
+		wire:         w,
+		streamName:   streamName,
+		readResponse: http.ReadResponse,
 	}
+	for _, option := range options {
+		if option == nil {
+			continue
+		}
+		option(c)
+	}
+	return c
+}
+
+// ClientOption sets an optional parameter for client instance.
+type ClientOption func(c *Client)
+
+func SetReadResponse(r ReadResponse) ClientOption {
+	return func(c *Client) { c.readResponse = r }
 }
 
 func WithSession(ctx context.Context, sessionID uuid.UUID) context.Context {
 	return context.WithValue(ctx, ContextKeySessionID, sessionID)
 }
 
-func (c *HTTPClient) WithTx(ctx context.Context, sessionID uuid.UUID, fn func(streamCtx context.Context) error) error {
+func (c *Client) WithTx(ctx context.Context, sessionID uuid.UUID, fn func(streamCtx context.Context) error) error {
 	session, err := c.wire.Session(sessionID)
 	if err != nil {
 		return err
@@ -69,7 +85,7 @@ func (c *HTTPClient) WithTx(ctx context.Context, sessionID uuid.UUID, fn func(st
 	return fn(ctx)
 }
 
-func (c *HTTPClient) Do(req *http.Request) (resp *http.Response, err error) {
+func (c *Client) Do(req *http.Request) (resp *http.Response, err error) {
 	ctx := req.Context()
 	sid, ok := ctx.Value(ContextKeySessionID).(uuid.UUID)
 	if !ok {
@@ -80,7 +96,7 @@ func (c *HTTPClient) Do(req *http.Request) (resp *http.Response, err error) {
 	return resp, err
 }
 
-func (c *HTTPClient) doSession(sid uuid.UUID, req *http.Request) (*http.Response, error) {
+func (c *Client) doSession(sid uuid.UUID, req *http.Request) (*http.Response, error) {
 	session, err := c.wire.Session(sid)
 	if err != nil {
 		return nil, err
@@ -96,7 +112,12 @@ func (c *HTTPClient) doSession(sid uuid.UUID, req *http.Request) (*http.Response
 	if err := req.WriteProxy(writer); err != nil {
 		return nil, err
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(reader), req)
+	if req.Body != nil {
+		req.Body.Close()
+	}
+	writer.Close()
+
+	resp, err := c.readResponse(bufio.NewReader(reader), req)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +129,7 @@ func (c *HTTPClient) doSession(sid uuid.UUID, req *http.Request) (*http.Response
 	return resp, nil
 }
 
-func (c *HTTPClient) doTx(ctx context.Context, req *http.Request) (*http.Response, error) {
+func (c *Client) doTx(ctx context.Context, req *http.Request) (*http.Response, error) {
 	streamReader, ok := ctx.Value(ContextKeyStreamReader).(io.ReadCloser)
 	if !ok {
 		return nil, ErrStreamReaderNotDefined
@@ -121,9 +142,12 @@ func (c *HTTPClient) doTx(ctx context.Context, req *http.Request) (*http.Respons
 	if err := req.WriteProxy(streamWriter); err != nil {
 		return nil, err
 	}
+	if req.Body != nil {
+		req.Body.Close()
+	}
 	streamWriter.Close()
 
-	resp, err := http.ReadResponse(bufio.NewReader(streamReader), req)
+	resp, err := c.readResponse(bufio.NewReader(streamReader), req)
 	if err != nil {
 		return nil, err
 	}

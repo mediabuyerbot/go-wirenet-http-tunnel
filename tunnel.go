@@ -5,24 +5,43 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"time"
+
+	"github.com/mediabuyerbot/httpclient"
 
 	"github.com/mediabuyerbot/go-wirenet"
 )
 
+const (
+	DefaultReTryCount  = 5
+	DefaultHTTPTimeout = 10 * time.Second
+)
+
+type ReadRequest func(*bufio.Reader) (*http.Request, error)
+type ReadResponse func(*bufio.Reader, *http.Request) (*http.Response, error)
+
 type Tunnel struct {
-	client       http.Client
+	client       httpclient.Client
 	errorHandler ErrorHandler
+	readRequest  ReadRequest
 }
 
-func NewTunnel(
-	client http.Client,
+func New(
 	options ...TunnelOption,
 ) *Tunnel {
+	defaultClient, _ := httpclient.New(
+		httpclient.WithRetryCount(DefaultReTryCount),
+		httpclient.WithTimeout(DefaultHTTPTimeout),
+	)
 	tunnel := &Tunnel{
-		client:       client,
+		readRequest:  http.ReadRequest,
+		client:       defaultClient,
 		errorHandler: NewLogErrorHandler(),
 	}
 	for _, option := range options {
+		if option == nil {
+			continue
+		}
 		option(tunnel)
 	}
 	return tunnel
@@ -31,10 +50,18 @@ func NewTunnel(
 // TunnelOption sets an optional parameter for tunnel instance.
 type TunnelOption func(tunnel *Tunnel)
 
-// TunnelErrorHandler is used to handle non-terminal errors. By default,
+// SetTunnelErrorHandler is used to handle non-terminal errors. By default,
 // non-terminal errors are ignored. This is intended as a diagnostic measure.
-func TunnelErrorHandler(errorHandler ErrorHandler) TunnelOption {
+func SetTunnelErrorHandler(errorHandler ErrorHandler) TunnelOption {
 	return func(tunnel *Tunnel) { tunnel.errorHandler = errorHandler }
+}
+
+func SetClient(client httpclient.Client) TunnelOption {
+	return func(tunnel *Tunnel) { tunnel.client = client }
+}
+
+func SetReadRequest(r ReadRequest) TunnelOption {
+	return func(tunnel *Tunnel) { tunnel.readRequest = r }
 }
 
 // Handle implements the Handler interface.
@@ -43,25 +70,28 @@ func (tunnel Tunnel) Handle(ctx context.Context, stream wirenet.Stream) {
 	reader := stream.Reader()
 	writer := stream.Writer()
 	for !stream.IsClosed() {
-		req, err := http.ReadRequest(bufio.NewReader(reader))
+		req, err := tunnel.readRequest(bufio.NewReader(reader))
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
 			tunnel.errorHandler.Handle(ctx, err)
-			return
+			break
 		}
 		reader.Close()
+
 		req.RequestURI = ""
 		resp, err := tunnel.client.Do(req)
 		if err != nil {
 			tunnel.errorHandler.Handle(ctx, err)
-			return
+			break
 		}
+
 		if err := resp.Write(writer); err != nil {
 			tunnel.errorHandler.Handle(ctx, err)
-			return
+			break
 		}
+		resp.Body.Close()
 		writer.Close()
 	}
 }
