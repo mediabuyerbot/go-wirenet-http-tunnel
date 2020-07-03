@@ -28,7 +28,7 @@ client.go OR server.go
  ...
 
  // Make client
- client := NewClient(wire, "tunnel")
+ client := httptunnel.NewClient(wire, "tunnel")
  ctx := context.Background()
  
  // 1. One request in one stream
