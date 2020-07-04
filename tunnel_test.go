@@ -137,6 +137,104 @@ func TestTunnel_Handle(t *testing.T) {
 	<-done
 }
 
+func TestTunnel_RequestResponseHookHandle(t *testing.T) {
+	addr := randomAddr(t)
+
+	initSrv := make(chan struct{})
+	initCli := make(chan struct{})
+	done := make(chan struct{})
+	want := []byte("HELLO")
+
+	// http server
+	httphandler := func(rw http.ResponseWriter, r *http.Request) {
+		c1, err := r.Cookie("cookie1")
+		assert.Nil(t, err)
+		c2, err := r.Cookie("cookie2")
+		assert.Nil(t, err)
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "A", r.Header.Get("X-Header-A"))
+		assert.Equal(t, "B", r.Header.Get("X-Header-B"))
+		assert.Equal(t, "new user agent", r.Header.Get("User-Agent"))
+		assert.Equal(t, "token", r.Header.Get("X-Token"))
+		assert.Equal(t, "val", c1.Value)
+		assert.Equal(t, "val", c2.Value)
+		rw.Header().Set("X-Token", "token")
+		_, err = rw.Write(want)
+		assert.Nil(t, err)
+	}
+	httpsrv := httptest.NewServer(http.HandlerFunc(httphandler))
+
+	// server side
+	server, err := wirenet.Mount(addr, wirenet.WithConnectHook(func(closer io.Closer) {
+		close(initSrv)
+	}))
+	assert.Nil(t, err)
+	go func() {
+		assert.Nil(t, server.Connect())
+	}()
+	<-initSrv
+
+	// client side
+	wire, err := wirenet.Join(addr, wirenet.WithSessionOpenHook(func(session wirenet.Session) {
+		close(initCli)
+	}))
+	assert.Nil(t, err)
+
+	tunnel := New(
+		RequestHook(func(r *http.Request) {
+			r.AddCookie(&http.Cookie{
+				Name:  "cookie1",
+				Path:  "/",
+				Value: "val",
+			})
+			r.AddCookie(&http.Cookie{
+				Name:  "cookie2",
+				Path:  "/",
+				Value: "val",
+			})
+			r.Header.Add("X-Token", "token")
+		}),
+		ResponseHook(func(r *http.Response) {
+			r.Header.Del("X-Token")
+		}))
+	wire.Stream("tunnel", tunnel.Handle)
+
+	go func() {
+		assert.Nil(t, wire.Connect())
+	}()
+	<-initCli
+
+	go func() {
+		time.Sleep(2 * time.Second)
+
+		defer close(done)
+		client := NewClient(server, "tunnel")
+		ctx := context.Background()
+
+		for sid, _ := range wire.Sessions() {
+			err = client.WithTx(ctx, sid, func(streamCtx context.Context) error {
+				req1, err := http.NewRequestWithContext(streamCtx, http.MethodGet, httpsrv.URL, nil)
+				assert.Nil(t, err)
+				req1.Header.Add("X-Header-A", "A")
+				req1.Header.Add("X-Header-B", "B")
+				req1.Header.Set("User-Agent", "new user agent")
+				resp, err := client.Do(req1)
+				assert.Nil(t, err)
+				data, err := ioutil.ReadAll(resp.Body)
+				assert.Nil(t, err)
+				assert.Empty(t, resp.Header.Get("X-Token"))
+				assert.Nil(t, resp.Body.Close())
+				assert.Equal(t, want, data)
+				assert.Equal(t, http.StatusOK, resp.StatusCode)
+				return nil
+			})
+			assert.Nil(t, err)
+		}
+	}()
+
+	<-done
+}
+
 func TestTunnel_ErrorHandle(t *testing.T) {
 	addr := randomAddr(t)
 

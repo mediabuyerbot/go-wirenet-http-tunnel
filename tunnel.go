@@ -17,13 +17,24 @@ const (
 	DefaultHTTPTimeout = 120 * time.Second
 )
 
+// ReadRequest reads and parses an incoming request from b.
 type ReadRequest func(*bufio.Reader) (*http.Request, error)
+
+// ReadResponse reads and returns an HTTP response from r.
 type ReadResponse func(*bufio.Reader, *http.Request) (*http.Response, error)
+
+// RequestFunc
+type RequestFunc func(r *http.Request)
+
+// ResponseFunc
+type ResponseFunc func(r *http.Response)
 
 type Tunnel struct {
 	client       httpclient.Client
 	errorHandler ErrorHandler
 	readRequest  ReadRequest
+	before       []RequestFunc
+	after        []ResponseFunc
 }
 
 func New(
@@ -37,6 +48,8 @@ func New(
 		readRequest:  http.ReadRequest,
 		client:       defaultClient,
 		errorHandler: NewLogErrorHandler(),
+		before:       []RequestFunc{},
+		after:        []ResponseFunc{},
 	}
 	for _, option := range options {
 		if option == nil {
@@ -56,12 +69,26 @@ func SetTunnelErrorHandler(errorHandler ErrorHandler) TunnelOption {
 	return func(tunnel *Tunnel) { tunnel.errorHandler = errorHandler }
 }
 
+// SetClient sets the HTTP client.
 func SetClient(client httpclient.Client) TunnelOption {
 	return func(tunnel *Tunnel) { tunnel.client = client }
 }
 
+// SetReadRequest sets the parser for incoming request.
 func SetReadRequest(r ReadRequest) TunnelOption {
 	return func(tunnel *Tunnel) { tunnel.readRequest = r }
+}
+
+// RequestHook functions are executed on the HTTP request object before the
+// request is send.
+func RequestHook(before ...RequestFunc) TunnelOption {
+	return func(tunnel *Tunnel) { tunnel.before = append(tunnel.before, before...) }
+}
+
+// ResponseHook functions are executed on the HTTP response writer after the
+// endpoint is invoked, but before anything is written to the client.
+func ResponseHook(after ...ResponseFunc) TunnelOption {
+	return func(tunnel *Tunnel) { tunnel.after = append(tunnel.after, after...) }
 }
 
 // Handle implements the Handler interface.
@@ -80,11 +107,19 @@ func (tunnel Tunnel) Handle(ctx context.Context, stream wirenet.Stream) {
 		}
 		reader.Close()
 
+		for _, f := range tunnel.before {
+			f(req)
+		}
+
 		req.RequestURI = ""
 		resp, err := tunnel.client.Do(req)
 		if err != nil {
 			tunnel.errorHandler.Handle(ctx, err)
 			break
+		}
+
+		for _, f := range tunnel.after {
+			f(resp)
 		}
 
 		if err := resp.Write(writer); err != nil {
